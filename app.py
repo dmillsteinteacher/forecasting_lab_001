@@ -5,21 +5,29 @@ import numpy as np
 st.set_page_config(layout="wide", page_title="3-State Forecaster Dashboard")
 
 # --- INITIAL SESSION STATE ---
-if 'history' not in st.session_state:
-    # Initialize with a uniform prior
-    init_v = np.array([0.333, 0.333, 0.334])
-    st.session_state.current_probs = init_v
-    st.session_state.history = pd.DataFrame([init_v], columns=['State 1', 'State 2', 'State 3'])
+if 'current_probs' not in st.session_state:
+    # Default to uniform distribution
+    st.session_state.current_probs = np.array([0.333, 0.333, 0.334])
+    st.session_state.history = pd.DataFrame([st.session_state.current_probs], 
+                                            columns=['State 1', 'State 2', 'State 3'])
 
 st.title("🎲 3-State Forecaster Dashboard")
-st.markdown("_Tracking hidden states through time and evidence._")
 
-# --- TOP ROW: THE LEVERS (A, B) ---
-st.subheader("1. The Model Levers")
-top_col1, top_col2 = st.columns(2)
+# --- NEW: CURRENT STATE METRICS ---
+# This gives immediate numerical feedback at the top of the screen
+m1, m2, m3 = st.columns(3)
+m1.metric("State 1 Confidence", f"{st.session_state.current_probs[0]:.1%}")
+m2.metric("State 2 Confidence", f"{st.session_state.current_probs[1]:.1%}")
+m3.metric("State 3 Confidence", f"{st.session_state.current_probs[2]:.1%}")
+
+st.divider()
+
+# --- TOP ROW: THE SETUP ---
+st.subheader("1. The Model Parameters")
+top_col1, top_col2, top_col3 = st.columns([1.5, 1.5, 1])
 
 with top_col1:
-    st.write("**Transition Matrix (A)** - _How the world changes over time_")
+    st.write("**Transition Matrix (A)**")
     a_df = pd.DataFrame(
         [[0.9, 0.05, 0.05], [0.1, 0.8, 0.1], [0.05, 0.05, 0.9]],
         columns=["To S1", "To S2", "To S3"],
@@ -28,7 +36,7 @@ with top_col1:
     A = st.data_editor(a_df, key="trans_matrix")
 
 with top_col2:
-    st.write("**Emissions Matrix (B)** - _How evidence relates to states_")
+    st.write("**Emissions Matrix (B)**")
     b_df = pd.DataFrame(
         [[0.8, 0.1, 0.1], [0.1, 0.8, 0.1], [0.1, 0.1, 0.8]],
         columns=["Obs: Low", "Obs: Med", "Obs: High"],
@@ -36,41 +44,46 @@ with top_col2:
     )
     B = st.data_editor(b_df, key="emiss_matrix")
 
+with top_col3:
+    st.write("**The Starting Line ($\pi$)**")
+    # This allows you to manually set the starting probabilities
+    start_s1 = st.number_input("Init S1", 0.0, 1.0, 0.333)
+    start_s2 = st.number_input("Init S2", 0.0, 1.0, 0.333)
+    start_s3 = 1.0 - (start_s1 + start_s2)
+    st.write(f"Init S3 (auto): **{max(0, start_s3):.3f}**")
+    
+    if st.button("Set Initial & Reset"):
+        st.session_state.current_probs = np.array([start_s1, start_s2, start_s3])
+        st.session_state.history = pd.DataFrame([st.session_state.current_probs], 
+                                                columns=['State 1', 'State 2', 'State 3'])
+        st.rerun()
+
 st.divider()
 
 # --- MIDDLE ROW: THE BAYES BOX ---
-st.subheader("2. Current Beliefs & The Bayes Box")
+st.subheader("2. Forecasting Actions")
 mid_col1, mid_col2, mid_col3 = st.columns([1, 2, 1])
 
 with mid_col1:
-    st.write("**Forecaster Actions**")
     if st.button("⏳ Advance Time (Drift)"):
-        # Markov Step
         st.session_state.current_probs = np.dot(st.session_state.current_probs, A.values)
         new_row = pd.DataFrame([st.session_state.current_probs], columns=['State 1', 'State 2', 'State 3'])
         st.session_state.history = pd.concat([st.session_state.history, new_row], ignore_index=True)
     
     st.write("---")
-    obs_choice = st.selectbox("Select New Evidence:", ["Obs: Low", "Obs: Med", "Obs: High"])
-    if st.button("👁️ Update with Evidence (Zap)"):
+    obs_choice = st.selectbox("Observe Data:", ["Obs: Low", "Obs: Med", "Obs: High"])
+    if st.button("👁️ Update (Bayes Zap)"):
         obs_idx = ["Obs: Low", "Obs: Med", "Obs: High"].index(obs_choice)
         likelihoods = B.values[:, obs_idx]
         
-        # Calculate Bayes Box
         priors = st.session_state.current_probs
         unnorm = priors * likelihoods
         st.session_state.current_probs = unnorm / np.sum(unnorm)
         
-        # Log History
         new_row = pd.DataFrame([st.session_state.current_probs], columns=['State 1', 'State 2', 'State 3'])
         st.session_state.history = pd.concat([st.session_state.history, new_row], ignore_index=True)
         
-        # Store for display in mid_col2
-        st.session_state.last_update = {
-            "Prior": priors,
-            "Likelihood": likelihoods,
-            "Unnormalized": unnorm
-        }
+        st.session_state.last_update = {"Prior": priors, "Likelihood": likelihoods, "Unnorm": unnorm}
 
 with mid_col2:
     if 'last_update' in st.session_state:
@@ -79,22 +92,15 @@ with mid_col2:
             "State": ["S1", "S2", "S3"],
             "Prior": st.session_state.last_update["Prior"],
             "Likelihood": st.session_state.last_update["Likelihood"],
-            "Unnorm": st.session_state.last_update["Unnormalized"],
+            "Unnorm": st.session_state.last_update["Unnorm"],
             "Posterior": st.session_state.current_probs
         })
         st.table(bbox_df.style.format("{:.3f}"))
-    else:
-        st.info("Click 'Update with Evidence' to see the Bayes Box math.")
 
 with mid_col3:
-    st.write("**Probability Mass**")
+    st.write("**Current Belief Mass**")
     st.bar_chart(st.session_state.current_probs)
 
-# --- BOTTOM ROW: THE TREND ---
-st.subheader("3. Forecasting History")
+# --- BOTTOM ROW: HISTORY ---
+st.subheader("3. Forecasting Trend")
 st.line_chart(st.session_state.history)
-
-if st.button("Reset Simulation"):
-    for key in st.session_state.keys():
-        del st.session_state[key]
-    st.rerun()
