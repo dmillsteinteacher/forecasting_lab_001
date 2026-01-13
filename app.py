@@ -6,15 +6,13 @@ st.set_page_config(layout="wide", page_title="3-State Forecaster Dashboard")
 
 # --- INITIAL SESSION STATE ---
 if 'current_probs' not in st.session_state:
-    # Default to uniform distribution
     st.session_state.current_probs = np.array([0.333, 0.333, 0.334])
     st.session_state.history = pd.DataFrame([st.session_state.current_probs], 
                                             columns=['State 1', 'State 2', 'State 3'])
 
 st.title("🎲 3-State Forecaster Dashboard")
 
-# --- NEW: CURRENT STATE METRICS ---
-# This gives immediate numerical feedback at the top of the screen
+# --- TOP METRICS ---
 m1, m2, m3 = st.columns(3)
 m1.metric("State 1 Confidence", f"{st.session_state.current_probs[0]:.1%}")
 m2.metric("State 2 Confidence", f"{st.session_state.current_probs[1]:.1%}")
@@ -22,7 +20,7 @@ m3.metric("State 3 Confidence", f"{st.session_state.current_probs[2]:.1%}")
 
 st.divider()
 
-# --- TOP ROW: THE SETUP ---
+# --- 1. MODEL PARAMETERS ---
 st.subheader("1. The Model Parameters")
 top_col1, top_col2, top_col3 = st.columns([1.5, 1.5, 1])
 
@@ -46,7 +44,6 @@ with top_col2:
 
 with top_col3:
     st.write("**The Starting Line ($\pi$)**")
-    # This allows you to manually set the starting probabilities
     start_s1 = st.number_input("Init S1", 0.0, 1.0, 0.333)
     start_s2 = st.number_input("Init S2", 0.0, 1.0, 0.333)
     start_s3 = 1.0 - (start_s1 + start_s2)
@@ -58,32 +55,45 @@ with top_col3:
                                                 columns=['State 1', 'State 2', 'State 3'])
         st.rerun()
 
+# --- VALIDATION ENGINE ---
+def validate_matrix(df, label):
+    sums = df.sum(axis=1)
+    is_valid = np.allclose(sums, 1.0, atol=1e-3)
+    if not is_valid:
+        st.error(f"❌ {label} Invalid: Row sums must be 1.0. Current: {list(sums.round(2))}")
+    return is_valid
+
+a_ok = validate_matrix(A, "Transition Matrix")
+b_ok = validate_matrix(B, "Emissions Matrix")
+app_ready = a_ok and b_ok
+
 st.divider()
 
-# --- MIDDLE ROW: THE BAYES BOX ---
+# --- 2. FORECASTING ACTIONS ---
 st.subheader("2. Forecasting Actions")
 mid_col1, mid_col2, mid_col3 = st.columns([1, 2, 1])
 
 with mid_col1:
-    if st.button("⏳ Advance Time (Drift)"):
-        st.session_state.current_probs = np.dot(st.session_state.current_probs, A.values)
-        new_row = pd.DataFrame([st.session_state.current_probs], columns=['State 1', 'State 2', 'State 3'])
-        st.session_state.history = pd.concat([st.session_state.history, new_row], ignore_index=True)
-    
-    st.write("---")
-    obs_choice = st.selectbox("Observe Data:", ["Obs: Low", "Obs: Med", "Obs: High"])
-    if st.button("👁️ Update (Bayes Zap)"):
-        obs_idx = ["Obs: Low", "Obs: Med", "Obs: High"].index(obs_choice)
-        likelihoods = B.values[:, obs_idx]
+    if app_ready:
+        if st.button("⏳ Advance Time (Drift)"):
+            st.session_state.current_probs = np.dot(st.session_state.current_probs, A.values)
+            new_row = pd.DataFrame([st.session_state.current_probs], columns=['State 1', 'State 2', 'State 3'])
+            st.session_state.history = pd.concat([st.session_state.history, new_row], ignore_index=True)
         
-        priors = st.session_state.current_probs
-        unnorm = priors * likelihoods
-        st.session_state.current_probs = unnorm / np.sum(unnorm)
-        
-        new_row = pd.DataFrame([st.session_state.current_probs], columns=['State 1', 'State 2', 'State 3'])
-        st.session_state.history = pd.concat([st.session_state.history, new_row], ignore_index=True)
-        
-        st.session_state.last_update = {"Prior": priors, "Likelihood": likelihoods, "Unnorm": unnorm}
+        st.write("---")
+        obs_choice = st.selectbox("Observe Data:", ["Obs: Low", "Obs: Med", "Obs: High"])
+        if st.button("👁️ Update (Bayes Zap)"):
+            obs_idx = ["Obs: Low", "Obs: Med", "Obs: High"].index(obs_choice)
+            likelihoods = B.values[:, obs_idx]
+            priors = st.session_state.current_probs
+            unnorm = priors * likelihoods
+            st.session_state.current_probs = unnorm / np.sum(unnorm)
+            
+            new_row = pd.DataFrame([st.session_state.current_probs], columns=['State 1', 'State 2', 'State 3'])
+            st.session_state.history = pd.concat([st.session_state.history, new_row], ignore_index=True)
+            st.session_state.last_update = {"Prior": priors, "Likelihood": likelihoods, "Unnorm": unnorm}
+    else:
+        st.warning("⚠️ Action Buttons Disabled: Please fix the matrices above so all rows sum to 1.0.")
 
 with mid_col2:
     if 'last_update' in st.session_state:
@@ -101,6 +111,6 @@ with mid_col3:
     st.write("**Current Belief Mass**")
     st.bar_chart(st.session_state.current_probs)
 
-# --- BOTTOM ROW: HISTORY ---
+# --- 3. TREND ---
 st.subheader("3. Forecasting Trend")
 st.line_chart(st.session_state.history)
